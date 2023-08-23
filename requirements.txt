@@ -1,0 +1,5 @@
+pycel
+formulas
+openpyxl
+pandas
+locate
