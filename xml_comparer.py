@@ -51,6 +51,9 @@ def pretty_print_xml(xml_file):
     tree.write(xml_file, encoding="utf-8", xml_declaration=True)
 
 
+#dump_sheet1("your_workbook_cached.xlsx")
+
 # Example usage
-dump_sheet1("your_workbook_cached.xlsx")
-pretty_print_xml("dump/sheet1.xml")
+for i in list(Path("dump").rglob("*.xml")) + list(Path("dump").rglob("*.rels")):
+    pretty_print_xml(i)
+
