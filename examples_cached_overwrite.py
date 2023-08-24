@@ -1,44 +1,89 @@
 import openpyxl
 from openpyxl import LXML
 from openpyxl.cell import _writer as _cell_writer
-from openpyxl.worksheet import _writer as _worksheet_writer
 from openpyxl.compat import safe_string
 from types import SimpleNamespace
 from contextlib import contextmanager
 from openpyxl.workbook import Workbook
-from typing import Dict, Tuple, List, Any, Iterator
+from typing import Dict, Tuple, List, Any, Iterator, Union
 from openpyxl import load_workbook
 from pathlib import Path
-import os
-import importlib
-from functools import lru_cache
 
 
-@lru_cache
-def _list_modules(package_dir: Path) -> List[str]:
+def _is_subpath(child_path: Union[Path, str], parent_path: Union[Path, str]) -> bool:
     """
-    List all importable Python modules from a package directory.
+    Check if one path is a subpath of another.
 
     Args:
-        package_dir: The directory where the package is located.
+        child_path: The child path to check.
+        parent_path: The parent path to check against.
 
     Returns:
-        A sorted list of importable module strings.
+        True if child_path is a subpath of parent_path, False otherwise.
     """
+    child = Path(child_path).resolve()
+    parent = Path(parent_path).resolve()
+    try:
+        child.relative_to(parent)
+        return True
+    except ValueError:
+        return False
 
-    locations = []
-    for path in package_dir.rglob("*.py"):
-        parts = path.with_suffix("").relative_to(package_dir.parent).parts
 
-        if path.name == "__init__.py":
-            parts = parts[:-1]
+def _module_file_path(module: Any) -> Union[None, Path]:
+    """
+    Retrieve the file path of a module.
 
-        if all([i.isidentifier() for i in parts]):
-            locations.append(".".join(parts))
+    Args:
+        module: The module whose file path is to be retrieved.
 
-    for i in sorted(locations):
-        print(i)
-    return sorted(locations)
+    Returns:
+        The file path of the module if it exists, otherwise None.
+    """
+    try:
+        return Path(module.__file__).resolve()
+    except AttributeError:
+        return None
+
+
+def _find_submodules(module: Any) -> Dict[Path, Any]:
+    """
+    Recursively find all submodules of a given module.
+
+    Args:
+        module: The parent module to search from.
+
+    Returns:
+        A dictionary mapping file paths to module objects.
+
+    Raises:
+        ValueError: If the module is not loaded from a file.
+    """
+    cache_dict = {}
+
+    module_path = _module_file_path(module)
+    if module_path is None:
+        raise ValueError("Module must be a module loaded from a file.")
+
+    module_dir = module_path.parent
+
+    def recurse(module):
+        path = _module_file_path(module)
+        if (path is None) or (path in cache_dict) or not _is_subpath(path, module_dir):
+            return
+
+        cache_dict[path] = module
+
+        for attr_name in dir(module):
+            try:
+                attr = getattr(module, attr_name)
+            except Exception:
+                continue
+
+            recurse(attr)
+
+    recurse(module)
+    return cache_dict
 
 
 def _list_monkeypatch_locations(package: Any, function: Any) -> List[Tuple[Any, str]]:
@@ -52,22 +97,13 @@ def _list_monkeypatch_locations(package: Any, function: Any) -> List[Tuple[Any, 
     Returns:
         A list of tuples containing module and attribute name.
     """
-    locations = _list_modules(Path(package.__file__).parent)
+    locations = _find_submodules(package)
 
     f_locations = []
-    for location in locations:
-        try:
-            module = importlib.import_module(location)
-
-        # This is a hack to avoid importing non-modules or modules that cannot be imported
-        # because they are reserved for conditional imports like system dependent modules
-        # this is dangerous because it can load side effects that are not intended to be loaded
-        except Exception:
-            continue
-
-        for i, j in module.__dict__.items():
-            if j is function:
-                f_locations.append((module, i))
+    for filename, module in locations.items():
+        for attr_name in dir(module):
+            if (attr := getattr(module, attr_name)) is function:
+                f_locations.append((module, attr_name))
 
     return f_locations
 
@@ -81,7 +117,7 @@ def _write_cell_cache(
     worksheet: Any,
     cell: Any,
     *args,
-    **kwargs
+    **kwargs,
 ) -> None:
     """
     Custom openpyxl.worksheet._writer.write_cell wrapper function with cached
@@ -149,16 +185,14 @@ def _monkey_patch_openpyxl_write_cell(
         def _write_cell_closure(*args, **kwargs):
             return _write_cell_cache(cached_values, *args, **kwargs)
 
-        for module, function_name in _list_monkeypatch_locations(
-            openpyxl, _write_cell_orig
-        ):
+        f_list = _list_monkeypatch_locations(openpyxl, _write_cell_orig)
+
+        for module, function_name in f_list:
             setattr(module, function_name, _write_cell_closure)
 
         yield
     finally:
-        for module, function_name in _list_monkeypatch_locations(
-            openpyxl, _write_cell_orig
-        ):
+        for module, function_name in f_list:
             setattr(module, function_name, _write_cell_orig)
 
 
