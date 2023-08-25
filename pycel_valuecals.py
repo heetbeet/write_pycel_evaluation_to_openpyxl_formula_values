@@ -1,12 +1,18 @@
-import pycel
 from monkeypatching import monkeypatch_module_object
 from openpyxl.workbook import Workbook
+import pycel
+from pycel.excelutil import criteria_parser
 
 
 def _criteria_parser(criteria):
-    if criteria is None:
-        criteria = ""
-    return pycel.excelutil.criteria_parser(criteria)
+    """
+    The original criteria parser function from pycel.excelutil.criteria_parser used in sumifs, countifs, etc.
+    does not support matching empty cells. This function monkeypatches the original function to match empty cells
+    against an empty string ("").
+
+    TODO: investigate what the Excel default is.
+    """
+    return criteria_parser(criteria if criteria is not None else "")
 
 
 def extract_formula_calculations(wb: Workbook):
@@ -30,7 +36,6 @@ def extract_formula_calculations(wb: Workbook):
         pycel,
         pycel.excelutil.criteria_parser,
         _criteria_parser,
-        cached=True,
     ):
         for ws in wb:
             ws_name = ws.title

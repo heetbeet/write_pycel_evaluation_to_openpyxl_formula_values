@@ -1,71 +1,9 @@
-import openpyxl
-from pycel import ExcelCompiler
-from monkeypatching import monkeypatch_module_object
+from pycel_valuecals import extract_formula_calculations
+from openpyxl_replacetable import replace_table
 from openpyxl_valuecache import save_workbook_with_cache
-from openpyxl.utils import coordinate_to_tuple
+
 import pandas as pd
-import pycel
-
-from pycel.excelutil import criteria_parser
-
-
-def _criteria_parser(criteria):
-    if criteria is None:
-        criteria = ""
-    return criteria_parser(criteria)
-
-
-def replace_table(wb, tablename, df):
-    # Initialize variables
-    table = None
-    ws = None
-
-    # Loop through all worksheets to find the table
-    for sheet in wb:
-        for tbl in sheet._tables.values():
-            if tbl.name == tablename:
-                table = tbl
-                ws = sheet
-                break
-        if table:
-            break
-
-    # If table is not found, throw an exception
-    if table is None:
-        raise Exception("Table not found.")
-
-    # Parse table.ref string to get the start and end cells
-    start_cell, end_cell = table.ref.split(":")
-    start_row, start_col = coordinate_to_tuple(start_cell)
-    end_row, end_col = coordinate_to_tuple(end_cell)
-
-    # Clear existing data
-    for row in ws.iter_rows(
-        min_row=start_row, max_row=end_row, min_col=start_col, max_col=end_col
-    ):
-        for cell in row:
-            cell.value = None
-
-    # Update table headers and data
-    new_headers = list(df.columns)
-    new_data = df.values.tolist()
-    all_data = [new_headers] + new_data
-
-    # Write all data to the worksheet
-    for i, row_data in enumerate(all_data, start=start_row):
-        for j, value in enumerate(row_data, start=start_col):
-            ws.cell(row=i, column=j, value=value)
-
-    # Resize table to fit new data
-    end_row = start_row + len(all_data) - 1
-    end_col = start_col + len(new_headers) - 1
-    new_range = (
-        ws.cell(row=start_row, column=start_col).coordinate
-        + ":"
-        + ws.cell(row=end_row, column=end_col).coordinate
-    )
-    table.ref = new_range
-
+import openpyxl
 
 # Load the Excel workbook
 wb = openpyxl.load_workbook("va-template.xlsx")
@@ -165,33 +103,7 @@ df = pd.DataFrame(data)
 
 # Replace table
 replace_table(wb, "Timesheet", df)
-
-with monkeypatch_module_object(pycel, criteria_parser, _criteria_parser):
-    compiler = ExcelCompiler(excel=wb)
-
-    compiler.recalculate()
-
-    # Create an empty dictionary to store cell coordinates and their evaluated values
-    cell_values = {}
-
-    # Loop through the worksheets in the workbook
-    for ws in wb:
-        ws_name = ws.title
-
-        # Loop through all the cells in the worksheet
-        for row in ws.iter_rows():
-            for cell in row:
-                # Check if the cell has a formula
-                if (
-                    cell.value
-                    and isinstance(cell.value, str)
-                    and cell.value.startswith("=")
-                ):
-                    formula = cell.value[1:]  # Remove the "="
-                    coord = f"{ws_name}!{cell.coordinate}"
-
-                    cell_values[ws_name, cell.coordinate] = compiler.evaluate(coord)
-
+cell_values = extract_formula_calculations(wb)
 
 # set wb to not calculate formulas
 wb.calculation.calcMode = "manual"
