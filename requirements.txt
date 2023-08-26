@@ -3,3 +3,4 @@ formulas
 openpyxl
 pandas
 locate
+monkeypatching
